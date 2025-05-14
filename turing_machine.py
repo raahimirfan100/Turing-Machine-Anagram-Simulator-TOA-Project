@@ -77,23 +77,9 @@ class TuringMachine:
             if self.head_position >= len(self.tape) - 10:  # less than 10 cells left
                 self.tape.extend(['_'] * 100)  # extend the tape with additional blank cells
 
-    def goto_separator(self):
-        while self.read() != '$' and self.read() != '_':
-            self.move('R')
-        return self.read() == '$'
-
     def getState(self):
         return self.state
 
-    def goto_start(self):
-        while self.head_position > 5:
-            # Check if the next position to the left has '*'
-            if self.head_position > 0 and self.tape[self.head_position - 1] == '*':
-                self.log_step("Found processed character (*), stopping leftward movement")
-                break
-            self.move('L')
-            self.log_step("Moving left to find_first_char")
-        return True
     def log_step(self, description):
         """
         keep track of what the machine is doing at each step.
@@ -189,17 +175,6 @@ class TuringMachine:
                 # keep moving left
                 self.move('L')
                 self.log_step("Moving left to find_first_char")
-    
-        elif self.state == 'move to first char':
-            if symbol == '*':
-            # still in padding, keep moving right
-                self.move('R')
-                self.log_step("Moving through padding to first character")
-            else:
-            # found the first character position
-                self.state = 'found_first_char'
-            # don't move - we want to process this character
-                self.log_step("Found first character position")
     
         elif self.state == 'found_first_char':
             if symbol == '$':
