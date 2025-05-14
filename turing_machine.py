@@ -21,7 +21,7 @@ class TuringMachine:
         # make the tape with input and blank space at both ends
         self.tape = list('_' * padding_left + input_string + '_' * padding_right)
         self.head_position = padding_left  # start after the blank spaces
-        self.state = 'scan to separator'
+        self.state = 'scan_to_separator'
         self.steps_log = []
         
         # remember where the separator is so we can find it easily
@@ -78,17 +78,22 @@ class TuringMachine:
                 self.tape.extend(['_'] * 100)  # extend the tape with additional blank cells
 
     def goto_separator(self):
-        """jump straight to the separator if we know where it is."""
-        if self.separator_position is not None:
-            self.head_position = self.separator_position
-            return True
-        return False
+        while self.read() != '$' and self.read() != '_':
+            self.move('R')
+        return self.read() == '$'
+
+    def getState(self):
+        return self.state
 
     def goto_start(self):
-        """go back to the beginning of the tape."""
-        self.head_position = 5
+        while self.head_position > 5:
+            # Check if the next position to the left has '*'
+            if self.head_position > 0 and self.tape[self.head_position - 1] == '*':
+                self.log_step("Found processed character (*), stopping leftward movement")
+                break
+            self.move('L')
+            self.log_step("Moving left to find_first_char")
         return True
-
     def log_step(self, description):
         """
         keep track of what the machine is doing at each step.
@@ -102,7 +107,6 @@ class TuringMachine:
         self.steps_log.append(f"Tape: {tape_str}")
         self.steps_log.append(f"Head: {head_indicator}")
         self.steps_log.append("-" * 50)
-
     def run(self):
         """
         runs the whole turing machine until it accepts or rejects.
@@ -148,121 +152,133 @@ class TuringMachine:
         """
         symbol = self.read()
 
-        if self.state == 'scan to separator':
-            # gotta find the separator first
+        if self.state == 'scan_to_separator':
+            # scan right until we find the separator
             if symbol == '#':
                 self.log_step("Found separator, starting anagram check")
-                # mark where the separator is
-                self.write('$')  # replace # with $ so we know where it is
-                self.separator_position = self.head_position  # remember this spot
-                self.state = 'find first char'
-                self.goto_start()  # go back to the beginning
+            # mark where the separator is
+                self.write('$')  # Replace # with $ so we know where it is
+                self.separator_position = self.head_position  # Remember this spot
+            # now go back to the start to process the first string
+                self.state = 'find_first_char'
+                self.move('L')  # Start moving left
+                self.log_step("Moving left to find_first_char")
             elif symbol == '_':
                 # check if this is just the beginning space or if we've gone too far
-                if self.head_position >= 5 + 10:  # if we're way past the start
+                if self.head_position >= 5 + 10:  # If we're way past the start
                     self.state = 'reject'
                     self.log_step("Reached end of tape without finding separator - ensure input has a # separator")
                 else:
-                    # still at the beginning, keep going
+                # still at the beginning, keep going
                     self.move('R')
+                    self.log_step("Moving right to find separator")
             else:
                 self.move('R')
-
-        elif self.state == 'find first char':
-            if symbol == '$':  # we hit our marked separator
-                # if we reach the separator, we've gone through the whole first string
+                self.log_step("Moving right to find separator")
+    
+        elif self.state == 'find_first_char':
+            # going back to the beginning of the tape
+            if self.head_position == 5:
+                # we've reached the beginning of the padding
+                self.state = 'found_first_char'
+                #self.move('R')  # Move right to start processing
+                self.log_step("Found first character position")
+            elif symbol == '*':
+                self.state='found_first_char'
+            else:
+                # keep moving left
+                self.move('L')
+                self.log_step("Moving left to find_first_char")
+    
+        elif self.state == 'move to first char':
+            if symbol == '*':
+            # still in padding, keep moving right
+                self.move('R')
+                self.log_step("Moving through padding to first character")
+            else:
+            # found the first character position
+                self.state = 'found_first_char'
+            # don't move - we want to process this character
+                self.log_step("Found first character position")
+    
+        elif self.state == 'found_first_char':
+            if symbol == '$':
+            # reached the separator
                 self.state = 'check second string'
-                self.move('R')  # move to first char of second string
+                self.move('R')
                 self.log_step("First string fully processed, checking second string")
-            elif symbol == '*':  # skip characters we already processed
+            elif symbol == '*':
+            # this character is already processed, move right
                 self.move('R')
-            elif symbol == '_':
-                # either empty first string or we processed everything
-                if self.head_position < 10:  # near the beginning
-                    # probably at the start of an empty string, find separator
-                    while self.read() != '$' and self.read() != '_':
-                        self.move('R')
-                        
-                    if self.read() == '$':
-                        # found separator, keep going
-                        self.state = 'check second string'
-                        self.move('R')  # move to first char of second string
-                        self.log_step("First string is empty, checking second string")
-                    else:
-                        # can't find separator, that's bad
-                        self.state = 'reject'
-                        self.log_step("Unexpected end of first string without finding separator")
-                else:
-                    # might have processed all first string chars
-                    # try to find separator
-                    save_pos = self.head_position
-                    
-                    current_symbol = self.read()
-                    while current_symbol != '$' and current_symbol != '_':
-                        self.move('R')
-                        current_symbol = self.read()
-                    
-                    if current_symbol == '$':
-                        # found separator, check second string
-                        self.state = 'check second string'
-                        self.move('R')
-                    else:
-                        # went too far, reject
-                        self.state = 'reject'
-                        self.log_step("Could not find separator after first string")
+                self.log_step("Skipping already processed character")
+                self.state = 'found_first_char'  # Stay in same state
+            elif symbol == '_' and self.head_position >= 5:
+            # at the beginning padding, move right
+                self.move('R')
+                self.log_step("At beginning padding, moving right")
+                self.state = 'found_first_char'  # Stay in same state
+            elif symbol == '*' and self.head_position >= 5:
+            # reached blank space in the middle of the string - move right
+                self.move('R')
+                self.log_step("Found blank in first string, moving right")
+                self.state = 'found_first_char'  # Stay in same state
             else:
-                # found a character to work with
+            # found an unprocessed character
                 current_char = symbol
-                self.write('*')  # mark that we've dealt with this one
-                self.log_step(f"Processing character '{current_char}' from first string")
-                
-                # remember where we are
-                current_pos = self.head_position
-
-                # go to separator if we know where it is
-                if not self.goto_separator():
-                    # find the separator
-                    while self.read() != '$':
-                        self.move('R')
-                        # if we hit blank space, we went too far
-                        if self.read() == '_':
-                            self.state = 'reject'
-                            self.log_step("Reached end of tape while looking for separator")
-                            return self.head_position
-                    
-                    # remember separator position for later
-                    self.separator_position = self.head_position
-
-                # move to second string
-                self.move('R')
-
-                # now look for a matching character
-                self.state = 'find match'
+                self.write('*')  # Mark as processed
                 self.original_char = current_char
-                self.log_step(f"Looking for match for '{current_char}' in second string")
+                self.log_step(f"Processing character '{current_char}' from first string")
+            
+            # now look for a match in the second string
+                self.state = 'scanback_to_separator'
+                self.move('R')
+                self.log_step("Moving right to find separator")
+    
+        elif self.state == 'scanback_to_separator':
+            if symbol == '$':
+            # found the separator, now move to second string
+                self.state = 'match_char'
+                self.move('R')
+                self.log_step(f"Reached separator, starting match search for '{self.original_char}'")
+            elif symbol == '_':
+            # end of tape without finding separator
+                self.state = 'reject'
+                self.log_step("Failed to find separator")
+            else:
+            # keep moving right to find separator
+                self.move('R')
+                self.log_step("Moving right to find separator")
 
-        elif self.state == 'find match':
+        elif self.state == 'found_char':
+            self.state = 'find_first_char'
+            self.move('L')
+    
+        elif self.state == 'match_char':
             if symbol == '_':
                 # reached end without a match, strings aren't anagrams
                 self.state = 'reject'
                 self.log_step(f"No match found for '{self.original_char}'")
             elif symbol == 'X':  # skip characters we already matched
                 self.move('R')
+                self.log_step("Skipping already matched character")
             elif symbol == self.original_char:
-                # found a match!
-                self.write('X')  # mark it as matched
+            # found a match!
+                self.write('X')
+                self.state = 'found_char'
                 self.log_step(f"Found match for '{self.original_char}'")
-
-                # go back to first string to continue
-                self.state = 'find first char'
-                self.goto_start()  # back to beginning
+                #self.move('L')
+            # return to first string to process next character
+                #self.state = 'find_first_char'  # Restart from beginning
+                self.log_step("Moving left to find_first_char")
             else:
                 # not a match, keep looking
                 self.move('R')
-
+                self.log_step("Moving right to match_char")
+    
         elif self.state == 'check second string':
             if symbol == 'X':  # skip characters we already matched
                 self.move('R')
+                self.log_step("Skipping matched character in second string")
             elif symbol == '_':
                 # got to the end of second string and everything matched!
                 self.state = 'accept'

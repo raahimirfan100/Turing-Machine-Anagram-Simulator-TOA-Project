@@ -1,14 +1,42 @@
-from PyQt5.QtWidgets import QWidget, QFrame
-from PyQt5.QtCore import Qt, QPoint, QRect
+from PyQt5.QtWidgets import QWidget, QFrame, QApplication
+from PyQt5.QtCore import Qt, QPoint, QRect, QRectF
 from PyQt5.QtGui import QPainter, QPolygon, QColor, QPen, QFont, QBrush, QPainterPath, QFontMetrics
+import sys
+import math
 
-from visual_settings import COLORS, SIZES, FONTS
+# visual settings similar to the provided code
+COLORS = {
+    "DEFAULT_STATE_BG": "#f0f0f0",
+    "DEFAULT_BORDER": "#666666",
+    "CURRENT_STATE": "#a0d2eb",
+    "ARROW_COLOR": "#3366cc",
+    "ACCEPT_STATE_BG": "#c8e6c9",
+    "ACCEPT_STATE_BORDER": "#2e7d32",
+    "REJECT_STATE_BG": "#ffcdd2",
+    "REJECT_STATE_BORDER": "#c62828"
+}
+
+SIZES = {
+    "STATE_NODE_SIZE": 90,
+    "STATE_RADIUS": 40,
+    "INNER_RADIUS": 30,
+    "ARROW_WIDTH": 12,
+    "LABEL_PADDING": 6,
+    "CURVE_OFFSET": 50
+}
+
+FONTS = {
+    "STATE_FONT": {"SIZE": 8},
+    "LABEL_FONT": {"SIZE": 8},
+    "LEGEND_FONT": {"SIZE": 8}
+}
 
 class StateNode(QWidget):
-    """a single node in our state diagram"""
-    def __init__(self, name, position, is_current=False, is_terminal=False, is_accept=False, parent=None):
+    """A node in the state diagram representing a single state"""
+    def __init__(self, name, turing_machine, position, is_current=False, is_terminal=False, is_accept=False, parent=None):
         super().__init__(parent)
         self.name = name
+        self.tm = turing_machine
         self.position = position
         self.is_current = is_current
         self.is_terminal = is_terminal
@@ -18,12 +46,14 @@ class StateNode(QWidget):
         
         # tooltip to explain what the state does
         descriptions = {
-            'scan_to_separator': "Searching for the # separator",
-            'find_first_char': "Finding next unprocessed character in first string",
-            'find_match': "Looking for matching character in second string",
-            'check_second_string': "Checking if all characters in second string are matched",
-            'accept': "Strings are anagrams - all characters matched",
-            'reject': "Strings are NOT anagrams - found unmatched characters"
+            'scan_to_separator': "Initial state - Scanning to separator",
+            'find_first_char': "Finding first character",
+            'found_first_char': "Found first character",
+            'scanback_to_separator': "Scanning back to separator",
+            'match_char': "Matching character",
+            'found_char': "Found matching character",
+            'accept': "Accept state - Strings match",
+            'reject': "Reject state - Strings don't match"
         }
         self.setToolTip(descriptions.get(name, name))
             
@@ -31,21 +61,24 @@ class StateNode(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         
+        is_current = (self.name == self.tm.getState())
+        is_accept = (self.name == "accept")
+        is_reject = (self.name == "reject")
+
         # pick colors based on state type
-        if self.is_accept:
+        if is_accept:
             bg_color = QColor(COLORS["ACCEPT_STATE_BG"])
             border_color = QColor(COLORS["ACCEPT_STATE_BORDER"])
-        elif self.is_terminal and not self.is_accept:
+        elif is_reject:
             bg_color = QColor(COLORS["REJECT_STATE_BG"])
             border_color = QColor(COLORS["REJECT_STATE_BORDER"])
-        elif self.is_current:
+        elif is_current:
             bg_color = QColor(COLORS["CURRENT_STATE"])
             border_color = QColor(COLORS["ARROW_COLOR"])
         else:
             bg_color = QColor(COLORS["DEFAULT_STATE_BG"])
-            border_color = QColor(COLORS["DEFAULT_BORDER"])
-            
-        # draw the circle for this state
+            border_color = QColor(COLORS["DEFAULT_BORDER"])    
+            # draw the state circle
         painter.setBrush(QBrush(bg_color))
         
         # make terminal states have double circles
@@ -58,11 +91,35 @@ class StateNode(QWidget):
         
         # second circle for terminal states
         if self.is_terminal:
-            inner_radius = SIZES["INNER_RADIUS"]
+            inner_radius = SIZES["INNER_RADIUS"]            # fill the ring between outer and inner circles for current terminal states (accept/reject)
+            if self.is_terminal and is_current:
+                # save current brush and create a new one for the ring
+                old_brush = painter.brush()
+                ring_color = QColor(border_color)
+                # make the color slightly lighter
+                h, s, v, a = ring_color.getHsv()
+                v = min(255, int(v * 3))  # increase brightness
+                ring_color.setHsv(h, s, v, a)
+                
+                ring_brush = QBrush(ring_color)
+                painter.setBrush(ring_brush)
+                ring_path = QPainterPath()
+                # outer circle
+                ring_path.addEllipse(SIZES["STATE_NODE_SIZE"]//2 - radius, SIZES["STATE_NODE_SIZE"]//2 - radius, radius * 2, radius * 2)
+                # subtract inner circle (creates a hole)
+                inner_path = QPainterPath()
+                inner_path.addEllipse(SIZES["STATE_NODE_SIZE"]//2 - inner_radius, SIZES["STATE_NODE_SIZE"]//2 - inner_radius, inner_radius * 2, inner_radius * 2)
+                ring_path = ring_path.subtracted(inner_path)
+                
+                # fill the ring path
+                painter.drawPath(ring_path)
+                painter.setBrush(old_brush)
+            
+            # draw the inner circle
             painter.drawEllipse(SIZES["STATE_NODE_SIZE"]//2 - inner_radius, SIZES["STATE_NODE_SIZE"]//2 - inner_radius, inner_radius * 2, inner_radius * 2)
             
-        # show the state name
-        painter.setPen(Qt.black)
+        # display the state name
+        painter.setPen(Qt.black if is_current else Qt.black)
         font = QFont()
         font.setPointSize(FONTS["STATE_FONT"]["SIZE"])
         font.setBold(self.is_current)
@@ -96,20 +153,22 @@ class StateTransition:
 
 
 class StateDiagram(QWidget):
-    """shows all the states and transitions in our turing machine"""
-    def __init__(self, parent=None):
+    """Enhanced visualization of the state machine with 8 states"""
+    def __init__(self, turing_machine, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(750, 400)  # big enough to fit everything
+        self.setMinimumSize(900, 500)  # increased size for better spacing
         self.current_state = "scan_to_separator"
-        
-        # where to put each state on the diagram
+        self.tm = turing_machine
+        # State positions arranged in a more logical flow
         self.state_positions = {
-            "scan_to_separator": QPoint(120, 180),
-            "find_first_char": QPoint(300, 100),
-            "find_match": QPoint(500, 100),
-            "check_second_string": QPoint(300, 280),
-            "accept": QPoint(650, 100),
-            "reject": QPoint(650, 280)
+            "scan_to_separator": QPoint(100, 150),
+            "find_first_char": QPoint(250, 150),
+            "found_first_char": QPoint(400, 150),
+            "scanback_to_separator": QPoint(550, 150),
+            "match_char": QPoint(550, 300),
+            "found_char": QPoint(400, 300),
+            "accept": QPoint(550, 50),  # Repositioned above found_first_char and scanback_to_separator
+            "reject": QPoint(700, 300)
         }
         
         # create all the state nodes
@@ -118,33 +177,59 @@ class StateDiagram(QWidget):
             is_terminal = state in ["accept", "reject"]
             is_accept = state == "accept"
             self.nodes[state] = StateNode(
-                state, pos, 
+                state, turing_machine, pos, 
                 is_current=(state == self.current_state),
                 is_terminal=is_terminal,
                 is_accept=is_accept, 
                 parent=self
             )
             
-        # set up all the transitions between states
+        # define transitions
         self.transitions = [
-            StateTransition("scan_to_separator", "find_first_char", "Found separator"),
-            StateTransition("find_first_char", "find_match", "Process char"),
-            StateTransition("find_match", "find_first_char", "Found match", curved=True, curve_direction=1),
-            StateTransition("find_first_char", "check_second_string", "First string done"),
-            StateTransition("check_second_string", "accept", "All matched"),
-            StateTransition("check_second_string", "reject", "Unmatched char"),
-            StateTransition("find_match", "reject", "No match found"),
+            StateTransition("scan_to_separator", "find_first_char", "(#, _, L)"),
+            StateTransition("find_first_char", "find_first_char", "(Σ, _ , L)", curved=True, curve_direction=1),  # loop
+            StateTransition("find_first_char", "found_first_char", "(_ | *, _, R)"),
+            StateTransition("found_first_char", "accept", "(#, _, R)"),
+            StateTransition("found_first_char", "scanback_to_separator", "(Σ, * , R)"),
+            StateTransition("scanback_to_separator", "scanback_to_separator", "(Σ, _ , R)", curved=True, curve_direction=1),  # loop
+            StateTransition("scanback_to_separator", "match_char", "(#, _, R)"),
+            StateTransition("match_char", "match_char", "(¬Σ, _, R)", curved=True, curve_direction=1),  # loop
+            StateTransition("match_char", "found_char", "(Σ, *, L)"),
+            StateTransition("match_char", "reject", "(_, _, R)"),
+            StateTransition("found_char", "found_char", "(X, _, L) U (*, _, L)", curved=True, curve_direction=1),  # loop
+            StateTransition("found_char", "find_first_char", "(#, _, L)"),
         ]
         
-        # where to put labels on arrows (above or below)
+        # Custom label positions (absolute x, y values)
+        self.label_coordinates = {
+            "scan_to_separator_find_first_char": (174, 170),
+            "find_first_char_find_first_char": (250, 65),
+            "find_first_char_found_first_char": (325, 130),
+            "found_first_char_accept": (455, 80),
+            "found_first_char_scanback_to_separator": (475, 170),
+            "scanback_to_separator_scanback_to_separator": (660, 150),
+            "scanback_to_separator_match_char": (515, 230),
+            "match_char_match_char": (550, 390),
+            "match_char_found_char": (477, 283),
+            "match_char_reject": (622, 283),
+            "found_char_found_char": (260, 300),
+            "found_char_find_first_char": (360, 220),
+        }
+
+        # Label position (above or below the arrow)
         self.label_positions = {
             "scan_to_separator_find_first_char": "above",
-            "find_first_char_find_match": "below",
-            "find_match_find_first_char": "above",
-            "find_first_char_check_second_string": "below",
-            "check_second_string_accept": "above",
-            "check_second_string_reject": "below",
-            "find_match_reject": "below",
+            "find_first_char_find_first_char": "above",
+            "find_first_char_found_first_char": "above",
+            "found_first_char_accept": "above",
+            "found_first_char_scanback_to_separator": "above",
+            "scanback_to_separator_scanback_to_separator": "above",
+            "scanback_to_separator_match_char": "above",
+            "match_char_match_char": "above",
+            "match_char_found_char": "below",
+            "match_char_reject": "above",
+            "found_char_found_char": "below",
+            "found_char_find_first_char": "below",
         }
         
     def set_state(self, state):
@@ -154,6 +239,7 @@ class StateDiagram(QWidget):
             
         # update all nodes
         for node_state, node in self.nodes.items():
+            node.tm = self.tm
             node.is_current = (node_state == state)
             node.update()
             
@@ -172,26 +258,57 @@ class StateDiagram(QWidget):
             
         # draw the legend to explain the colors
         self._draw_legend(painter)
+
+        # draw the Sigma (Σ) notation box
+        sigma_x = 20  # X position
+        sigma_y = 360  # Starting Y position
+
+        font = QFont()
+        font.setPointSize(10)
+        painter.setFont(font)
+        painter.setPen(Qt.black)
+
+        # list of lines to display
+        legend_lines = [
+            "Σ         -->    [a-zA-Z]",
+            "*         -->    visited character",
+            "#        -->    separator",
+            "_        -->    NULL character",
+            "R/L    -->    Right/Left"
+        ]
+
+        # draw each line with spacing
+        line_spacing = 30  # pixels between lines
+        for i, line in enumerate(legend_lines):
+            painter.drawText(sigma_x, sigma_y + i * line_spacing, line)
+
         
     def _draw_transition(self, painter, trans, from_pos, to_pos):
-        """draws an arrow between states"""
-        # figure out the direction
+        """Draw a transition arrow between states with improved visuals"""
+        # Self-loop handling
+        if trans.from_state == trans.to_state:
+            self._draw_self_loop(painter, trans, from_pos)
+            return
+            
+        # calculate direction vector
         dx = to_pos.x() - from_pos.x()
         dy = to_pos.y() - from_pos.y()
         length = (dx*dx + dy*dy) ** 0.5
         
         if length < 0.1:
-            return  # skip self-loops for now
+            return  # skip if positions are identical
             
         # normalize direction
         dx, dy = dx/length, dy/length
         
-        # calculate where to start and end the arrow (at edge of circles)
+        # calculate start and end points (offset from state circles)
+        # Use a small offset to ensure arrows precisely touch the circle edge
         node_radius = SIZES["STATE_RADIUS"]
-        start_x = from_pos.x() + dx * node_radius
-        start_y = from_pos.y() + dy * node_radius
-        end_x = to_pos.x() - dx * node_radius
-        end_y = to_pos.y() - dy * node_radius
+        circle_adjustment = 1  # Slight adjustment to make arrows touch circles precisely
+        start_x = from_pos.x() + dx * (node_radius - circle_adjustment)
+        start_y = from_pos.y() + dy * (node_radius - circle_adjustment)
+        end_x = to_pos.x() - dx * (node_radius - circle_adjustment)
+        end_y = to_pos.y() - dy * (node_radius - circle_adjustment)
         
         # figure out if label goes above or below
         transition_key = f"{trans.from_state}_{trans.to_state}"
@@ -201,6 +318,9 @@ class StateDiagram(QWidget):
         # create the path for drawing
         path = QPainterPath()
         path.moveTo(start_x, start_y)
+
+        custom_label_pos = self.label_coordinates.get(transition_key)
+
         
         if trans.curved:
             # make a curved arrow
@@ -242,19 +362,118 @@ class StateDiagram(QWidget):
         painter.setPen(QPen(QColor(COLORS["ARROW_COLOR"]), 2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
         painter.drawPath(path)
         
-        # draw arrowhead
-        angle = 3.14159 / 6  # 30 degrees
-        if trans.curved:
-            # for curves, calculate tangent at endpoint
+        # draw the arrowhead
+        self._draw_arrowhead(painter, end_x, end_y, dx, dy, trans.curved, ctrl_x if trans.curved else 0, ctrl_y if trans.curved else 0)
+        
+        # draw the label
+
+        if custom_label_pos:
+            label_x, label_y = custom_label_pos
+        if trans.label:
+            self._draw_label(painter, trans.label, label_x, label_y)
+    
+    def _draw_self_loop(self, painter, trans, pos):
+        """Draw a self-looping transition with customizable direction"""
+        # Get the state name
+        state_name = trans.from_state
+        
+        # Base radius for all loops - larger to make loops bigger and more visible
+        radius = 24
+        
+        # Direction-based configuration
+        # Format: [direction, offset_multiplier]
+        loop_configs = {
+            "find_first_char": ["up", 1.2],
+            "scanback_to_separator": ["right", 1.2],
+            "match_char": ["down", 1.2],
+            "found_char": ["left", 1.2]
+        }
+        
+        # Get direction for this state or default to "up"
+        config = loop_configs.get(state_name, ["up", 1.2])
+        direction = config[0]
+        offset_multiplier = config[1]
+        
+        # Calculate offsets and angles based on direction
+        offset = SIZES["STATE_RADIUS"] * offset_multiplier
+        
+        # Set parameters based on direction
+        if direction == "up":
+            cx_offset = 0
+            cy_offset = -offset
+            start_angle = 45
+            span_angle = 270
+        elif direction == "right":
+            cx_offset = offset
+            cy_offset = 0
+            start_angle = 135
+            span_angle = 270
+        elif direction == "down":
+            cx_offset = 0
+            cy_offset = offset
+            start_angle = 225
+            span_angle = 270
+        elif direction == "left":
+            cx_offset = -offset
+            cy_offset = 0
+            start_angle = 315
+            span_angle = 270
+        
+        # Calculate center point
+        cx = pos.x() + cx_offset
+        cy = pos.y() + cy_offset
+        
+        # Draw the arc - FIXED: Convert to QRect and use integers for angles
+        rect = QRect(int(cx - radius), int(cy - radius), int(radius * 2), int(radius * 2))
+        painter.setPen(QPen(QColor(COLORS["ARROW_COLOR"]), 2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        painter.drawArc(rect, int(start_angle * 16), int(span_angle * 24))
+        
+        # Calculate the endpoint for the arrowhead (convert angles to radians)
+        end_angle_rad = (start_angle + span_angle + 80) * 3.14159 / 180
+        # Calculate point precisely on the circle edge where the arrow should end
+        # Add a small adjustment to ensure the arrowhead touches the circle edge
+        arrow_touch_adjustment = 1  # Small adjustment to make arrow touch circle precisely
+        end_x = cx + (radius + arrow_touch_adjustment) * math.cos(end_angle_rad)
+        end_y = cy + (radius + arrow_touch_adjustment) * math.sin(end_angle_rad)
+        
+        # Direction vector at the endpoint (tangent to the circle)
+        dx = -math.sin(end_angle_rad)
+        dy = math.cos(end_angle_rad)
+        
+        # Draw arrowhead
+        self._draw_arrowhead(painter, end_x, end_y, dx, dy)
+
+        transition_key = f"{trans.from_state}_{trans.to_state}"
+        custom_label_pos = self.label_coordinates.get(transition_key)
+
+        # Draw the label if present
+        if trans.label:
+            # Position label based on the loop orientation
+            label_angle = (start_angle + span_angle/2) * 3.14159 / 180
+            if custom_label_pos:
+                label_x, label_y = custom_label_pos
+        
+            self._draw_label(painter, trans.label, label_x, label_y)
+    
+    def _draw_arrowhead(self, painter, end_x, end_y, dx, dy, is_curved=False, ctrl_x=0, ctrl_y=0):
+        """Draw an arrowhead at the end of a transition line"""
+        if is_curved:
+            # for curved paths, calculate tangent at endpoint
             dx = end_x - ctrl_x
             dy = end_y - ctrl_y
             length = (dx*dx + dy*dy) ** 0.5
-            dx, dy = dx/length, dy/length
+            if length > 0.1:
+                dx, dy = dx/length, dy/length
+        
+        # Slightly larger arrowhead for better visibility
+        arrow_width = SIZES["ARROW_WIDTH"] * 1.1
+        # Adjusted shape parameters for better appearance
+        angle_factor = 0.8  # Controls the "pointiness" of the arrow
             
-        a1_x = end_x - SIZES["ARROW_WIDTH"] * (dx * 0.866 + dy * 0.5)
-        a1_y = end_y - SIZES["ARROW_WIDTH"] * (dy * 0.866 - dx * 0.5)
-        a2_x = end_x - SIZES["ARROW_WIDTH"] * (dx * 0.866 - dy * 0.5)
-        a2_y = end_y - SIZES["ARROW_WIDTH"] * (dy * 0.866 + dx * 0.5)
+        a1_x = end_x - arrow_width * (dx * angle_factor + dy * 0.5)
+        a1_y = end_y - arrow_width * (dy * angle_factor - dx * 0.5)
+        a2_x = end_x - arrow_width * (dx * angle_factor - dy * 0.5)
+        a2_y = end_y - arrow_width * (dy * angle_factor + dx * 0.5)
         
         # make the arrowhead
         arrow = QPolygon()
@@ -265,45 +484,45 @@ class StateDiagram(QWidget):
         painter.setBrush(QBrush(QColor(COLORS["ARROW_COLOR"])))
         painter.setPen(Qt.NoPen)
         painter.drawPolygon(arrow)
+    
+    def _draw_label(self, painter, label_text, x, y):
+        """Draw a label for a transition"""
+        font = QFont()
+        font.setPointSize(FONTS["LABEL_FONT"]["SIZE"])
+        painter.setFont(font)
         
-        # add the label
-        if trans.label:
-            font = QFont()
-            font.setPointSize(FONTS["LABEL_FONT"]["SIZE"])
-            painter.setFont(font)
-            
-            # figure out how big the text is
-            metrics = QFontMetrics(font)
-            text_width = metrics.horizontalAdvance(trans.label)
-            text_height = metrics.height()
-            
-            # bit of padding around text
-            padding = SIZES["LABEL_PADDING"] - 1
-            
-            # make a semi-transparent background
-            bg_color = QColor(255, 255, 255)
-            bg_color.setAlpha(230)
-            painter.setBrush(QBrush(bg_color))
-            painter.setPen(QPen(QColor(COLORS["DEFAULT_BORDER"]), 1))
-            
-            # create a box for the label
-            label_rect = QRect(
-                int(label_x - text_width/2 - padding), 
-                int(label_y - text_height/2 - padding/2), 
-                text_width + padding*2, 
-                text_height + padding
-            )
-            
-            # draw rounded rectangle for label
-            painter.drawRoundedRect(label_rect, 5, 5)
-            
-            # add the text
-            painter.setPen(Qt.black)
-            painter.drawText(
-                int(label_x - text_width/2), 
-                int(label_y + text_height/3), 
-                trans.label
-            )
+        # calculate text dimensions
+        metrics = QFontMetrics(font)
+        text_width = metrics.horizontalAdvance(label_text)
+        text_height = metrics.height()
+        
+        # Smaller padding to make labels more compact
+        padding = SIZES["LABEL_PADDING"] - 1
+        
+        # Create semi-transparent white background
+        bg_color = QColor(255, 255, 255)
+        bg_color.setAlpha(230)
+        painter.setBrush(QBrush(bg_color))
+        painter.setPen(QPen(QColor(COLORS["DEFAULT_BORDER"]), 1))
+        
+        # Create label rectangle centered on the calculated position
+        label_rect = QRect(
+            int(x - text_width/2 - padding), 
+            int(y - text_height/2 - padding/2), 
+            text_width + padding*2, 
+            text_height + padding
+        )
+        
+        # rounded rectangle for label
+        painter.drawRoundedRect(label_rect, 5, 5)
+        
+        # draw text
+        painter.setPen(Qt.black)
+        painter.drawText(
+            int(x - text_width/2), 
+            int(y + text_height/3), 
+            label_text
+        )
                            
     def _draw_legend(self, painter):
         """draws a little box explaining what the different state colors mean"""
@@ -338,7 +557,7 @@ class StateDiagram(QWidget):
         # accept state
         y_pos += spacing
         painter.setBrush(QBrush(QColor(COLORS["ACCEPT_STATE_BG"])))
-        painter.setPen(QPen(QColor(COLORS["ACCEPT_STATE_BORDER"]), 1))
+        # painter.setPen(QPen(QColor(COLORS["ACCEPT_STATE_BORDER"]), 1))
         painter.drawEllipse(20, y_pos - 8, 16, 16)
         painter.drawEllipse(22, y_pos - 6, 12, 12)
         painter.setPen(Qt.black)
@@ -352,3 +571,11 @@ class StateDiagram(QWidget):
         painter.drawEllipse(22, y_pos - 6, 12, 12)
         painter.setPen(Qt.black)
         painter.drawText(45, y_pos + 4, "reject state")
+
+
+# For testing the widget
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    widget = StateDiagram()
+    widget.show()
+    sys.exit(app.exec_())

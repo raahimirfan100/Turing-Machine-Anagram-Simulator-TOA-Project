@@ -238,7 +238,7 @@ class TuringMachineSimulator(QMainWindow):
         state_box.setFixedWidth(280)  # or whatever width you want
         state_box.setLayout(state_layout)
         
-        self.state_label = QLabel(f"<b>{self.machine.state}</b>")
+        self.state_label = QLabel(f"<b>{self.machine.state.replace('_', ' ').title()}</b>")
         self.state_label.setAlignment(Qt.AlignCenter)
         self.state_label.setStyleSheet("font-size: 16px; text-transform: uppercase; letter-spacing: 1px;")
         state_layout.addWidget(self.state_label)
@@ -381,7 +381,7 @@ class TuringMachineSimulator(QMainWindow):
         state_layout = QVBoxLayout()
         state_group.setLayout(state_layout)
         
-        self.state_diagram = StateDiagram()
+        self.state_diagram = StateDiagram(self.machine)
         state_layout.addWidget(self.state_diagram)
         
         bottom_splitter.addWidget(state_group)
@@ -468,7 +468,7 @@ class TuringMachineSimulator(QMainWindow):
     
     def do_step(self):
         """runs one step of the turing machine"""
-        original_state = self.machine.state
+        original_state = self.machine.state.replace('_', ' ').title()
         original_position = self.machine.head_position
         original_symbol = self.machine.read()
         
@@ -476,7 +476,7 @@ class TuringMachineSimulator(QMainWindow):
         self.machine.step()
         
         # update ui
-        new_state = self.machine.state
+        new_state = self.machine.state.replace('_', ' ').title()
         new_position = self.machine.head_position
         new_symbol = self.machine.read()
         
@@ -502,24 +502,35 @@ class TuringMachineSimulator(QMainWindow):
             
         if self.machine.tape[original_position] != original_symbol:
             explanation_parts.append(f"<b>Write:</b> Changed '{original_symbol}' to '{self.machine.tape[original_position]}'")
-            
-        explanation_parts.append(f"<b>Current symbol:</b> '{new_symbol}'")
-        
+            explanation_parts.append(f"<b>Current symbol:</b> '{new_symbol}'")
         if new_state == 'accept':
             explanation_parts.append("\n<span style='color:green; font-weight:bold;'>✅ SUCCESS! The strings are anagrams.</span>")
-            self.auto_button.setChecked(False)
-            self.toggle_auto()
+            # stop auto-run immediately if active
+            if self.timer.isActive():
+                self.timer.stop()
+                self.auto_button.setChecked(False)
+                self.toggle_auto()
         elif new_state == 'reject':
             explanation_parts.append("\n<span style='color:red; font-weight:bold;'>❌ REJECTED! The strings are not anagrams.</span>")
-            self.auto_button.setChecked(False)
-            self.toggle_auto()
+            # stop auto-run immediately if active
+            if self.timer.isActive():
+                self.timer.stop()
+                self.auto_button.setChecked(False)
+                self.toggle_auto()
             
         self.update_explanation("<br>".join(explanation_parts))
-        
         return new_state not in ['accept', 'reject']
         
     def auto_step(self):
         """runs a step in auto mode"""
+        # check if we're already in a terminating state before doing another step
+        if self.machine.state in ['accept', 'reject']:
+            self.timer.stop()
+            self.auto_button.setChecked(False)
+            self.toggle_auto()
+            return
+            
+        # run a step and check if we should continue
         if not self.do_step():
             self.auto_button.setChecked(False)
             self.toggle_auto()
@@ -544,8 +555,8 @@ class TuringMachineSimulator(QMainWindow):
         # convert slider value (1-20) to milliseconds (2000-100)
         speed_value = self.speed_slider.value()
         self.auto_speed = int(2100 - speed_value * 100)
-        if self.timer.isActive():
-            self.timer.setInterval(self.auto_speed)
+
+        self.timer.setInterval(self.auto_speed)
     
     def load_strings(self):
         """loads new strings into the machine"""
@@ -571,6 +582,7 @@ class TuringMachineSimulator(QMainWindow):
             
         # reset ui
         self.refresh_tape()
+        self.state_diagram.tm = self.machine
         self.state_diagram.set_state(self.machine.state)
         self.state_label.setText(f"<b>{self.machine.state}</b>")
         
